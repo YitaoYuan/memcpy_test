@@ -1,9 +1,12 @@
 CXX = g++
-CXX_flags = -O3
+CXX_flags = -O3 # this does not affect performance
 link_flags = -lpthread -lnuma
-
-all: memcpy_test
+cuda_link_flags = -lcudart
+exe_list = memcpy_test cuda_memcpy_test
+all: $(exe_list)
 
 memcpy_test: memcpy_test.cpp
 	$(CXX) $(CXX_flags) -o $@ $^ $(link_flags)
 
+cuda_memcpy_test: cuda_memcpy_test.cpp
+	nvcc $(CXX_flags) -o $@ $^ $(link_flags) $(cuda_link_flags)

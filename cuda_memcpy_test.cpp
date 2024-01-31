@@ -1,10 +1,15 @@
 #include <bits/stdc++.h>
 #include <numa.h>
+#include <cuda.h>
+#include <cuda_runtime.h>
 //using namespace std;
 char *malloc_touched(size_t size, int node)
 {
     void *buf = numa_alloc_onnode(size, node);//numa_alloc_interleaved(size);//numa_alloc_local(size);//malloc(size);
     memset(buf, 0xff, size);
+    cudaHostRegister(buf, size, cudaHostRegisterDefault);
+    // I found that if we don't register it, the MemcpyAsync becomes sync
+    // And, registering memory let the throughput +80 Gbps (120->200)
     return (char*)buf;
 }
 uint64_t gettime_ns()
@@ -14,7 +19,8 @@ uint64_t gettime_ns()
     return cur_time.tv_sec * (uint64_t)1000000000 + cur_time.tv_nsec;
 }
 // no_inline: force the compiler not remove any call of this function (in optimization)
-__attribute__((noinline)) void volatile_memcpy(int node, void *rbuf, void *sbuf, size_t size)
+// volatile: used for the same reason as no_inline
+__attribute__((noinline)) void volatile_memcpy(int node, void *rbuf, void *sbuf, size_t size, cudaStream_t s)
 {
     //struct bitmask mask;
     //numa_node_to_cpus(node, &mask);
@@ -27,39 +33,39 @@ __attribute__((noinline)) void volatile_memcpy(int node, void *rbuf, void *sbuf,
             CPU_SET(i, &cpuset);
     int ret = pthread_setaffinity_np(thread, sizeof(cpuset), &cpuset);//numa api numa_sched_setaffinity() only set process affinity, not thread affinity
     assert(ret == 0);
-    memcpy(rbuf, sbuf, size);
-    //memcpy((void*)sbuf, (void*)rbuf, size);
+    cudaMemcpyAsync(rbuf, sbuf, size, cudaMemcpyDeviceToHost, s);
 }
-void repeate_volatile_memcpy(int n, int node, void *rbuf, void *sbuf, size_t size)
-{
-    for(int i = 0; i < n; i++) 
-        volatile_memcpy(node, rbuf, sbuf, size);
-}
+
 int main(int argc, char **argv)
 {
     size_t size = std::stoll(argv[1]);
-    int nthread = std::stoi(argv[2]);
+    int nthread = std::stoi(argv[2]);// It seems that nthread does not improve performance
     int niter = std::stoi(argv[3]);
     // numa_alloc_onnode
     // numa_alloc_interleaved
     // numa_alloc_local
-    if(size < 1000000000) {
-        printf("If you want to test DRAM speed, use GB level memory.\n");
-    }
     int nnode = numa_num_configured_nodes();
     printf("%d numa nodes\n", nnode);
     std::vector<std::pair<char *, char *>> mem_pool;
+    std::vector<cudaStream_t> thread_pool;
     for(int i = 0; i < nthread; i++) {
         int node = i % nnode;
-        mem_pool.push_back(std::make_pair(malloc_touched(size, node), malloc_touched(size, node)));
+        void *gpu_buf;
+        cudaMalloc(&gpu_buf, size);
+        mem_pool.push_back(std::make_pair(malloc_touched(size, node), (char*)gpu_buf));
+
+        cudaStream_t s;
+        cudaStreamCreate(&s);
+        thread_pool.push_back(s);
     }
     uint64_t start = gettime_ns();
-    std::vector<std::thread> thread_pool;
-    for(int i = 0; i < nthread; i++) {
-        thread_pool.push_back(std::thread(repeate_volatile_memcpy, niter, i % nnode, mem_pool[i].first, mem_pool[i].second, size));
+    for(int cnt = 0; cnt < niter; cnt ++) {
+        for(int i = 0; i < nthread; i++) {
+            volatile_memcpy(i % nnode, mem_pool[i].first, mem_pool[i].second, size, thread_pool[i]); 
+        }
     }
     for(int i = 0; i < nthread; i++) {
-	    thread_pool[i].join();
+	    cudaStreamSynchronize(thread_pool[i]);
     }
     //volatile_memcpy(rbuf, sbuf, size);
     // std::copy(sbuf, sbuf+size, rbuf);
