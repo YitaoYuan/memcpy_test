@@ -16,6 +16,11 @@ uint64_t gettime_ns()
 // no_inline: force the compiler not remove any call of this function (in optimization)
 __attribute__((noinline)) void volatile_memcpy(int node, void *rbuf, void *sbuf, size_t size)
 {
+    memcpy(rbuf, sbuf, size);
+    //memcpy((void*)sbuf, (void*)rbuf, size);
+}
+void repeate_volatile_memcpy(int n, int node, void *rbuf, void *sbuf, size_t size)
+{
     //struct bitmask mask;
     //numa_node_to_cpus(node, &mask);
     pthread_t thread = pthread_self();
@@ -27,11 +32,6 @@ __attribute__((noinline)) void volatile_memcpy(int node, void *rbuf, void *sbuf,
             CPU_SET(i, &cpuset);
     int ret = pthread_setaffinity_np(thread, sizeof(cpuset), &cpuset);//numa api numa_sched_setaffinity() only set process affinity, not thread affinity
     assert(ret == 0);
-    memcpy(rbuf, sbuf, size);
-    //memcpy((void*)sbuf, (void*)rbuf, size);
-}
-void repeate_volatile_memcpy(int n, int node, void *rbuf, void *sbuf, size_t size)
-{
     for(int i = 0; i < n; i++) 
         volatile_memcpy(node, rbuf, sbuf, size);
 }
