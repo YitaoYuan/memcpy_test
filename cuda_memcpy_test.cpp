@@ -5,9 +5,12 @@
 //using namespace std;
 char *malloc_touched(size_t size, int node)
 {
-    void *buf = numa_alloc_onnode(size, node);//numa_alloc_interleaved(size);//numa_alloc_local(size);//malloc(size);
-    memset(buf, 0xff, size);
+    // void *buf;
+    // cudaHostAlloc(&buf, size, cudaHostAllocDefault | cudaHostAllocWriteCombined);
+    void *buf = numa_alloc_onnode(size, node);//
+    // void *buf = numa_alloc_interleaved(size);//numa_alloc_local(size);//malloc(size);
     cudaHostRegister(buf, size, cudaHostRegisterDefault);
+    memset(buf, 0xff, size);
     // I found that if we don't register it, the MemcpyAsync becomes sync
     // And, registering memory let the throughput +80 Gbps (120->200)
     return (char*)buf;
@@ -34,13 +37,20 @@ int main(int argc, char **argv)
     // numa_alloc_interleaved
     // numa_alloc_local
     int nnode = numa_num_configured_nodes();
-    int node = 0;
-    numa_run_on_node(node);
+    int ngpu;
+    auto ret = cudaGetDeviceCount(&ngpu);
+    assert(ret == cudaSuccess);
 
-    printf("%d numa nodes\n", nnode);
+    printf("%d numa nodes, %d gpus\n", nnode, ngpu);
     std::vector<std::pair<char *, char *>> mem_pool;
     std::vector<cudaStream_t> thread_pool;
     for(int i = 0; i < nthread; i++) {
+        int gpuid = i % ngpu;
+        ret = cudaSetDevice(gpuid);
+        assert(ret == cudaSuccess);
+    
+
+        int node = i % nnode;
         void *gpu_buf;
         cudaMalloc(&gpu_buf, size);
         mem_pool.push_back(std::make_pair(malloc_touched(size, node), (char*)gpu_buf));
