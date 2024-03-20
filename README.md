@@ -6,7 +6,9 @@ numa架构也会影响，当cpu与内存位于相同numa socket时性能最好
 
 # cuda_memcpy_test
 
-对于同一块GPU，带宽和线程（stream）无关，和内存的numa socket也几乎无关
+对于同一块GPU，带宽和线程（stream）无关，和内存的numa socket有较大关系
+
+同时发现，两个不同node的gpu同时写所有node的内存会导致很大损失，但有趣的是overleaved的内存始终性能比较高
 
 cudaHostRegister能大大提升性能
 

@@ -21,10 +21,13 @@ __attribute__((noinline)) void memcpy_test(void *rbuf, void *sbuf, size_t size)
 {
     memcpy(rbuf, sbuf, size);
 }
-void repeate_memcpy_test(int n, void *rbuf, void *sbuf, size_t size)
+void repeate_memcpy_test(size_t n, void *rbuf, void *sbuf, size_t size, size_t size_alloc)
 {
-    for(int i = 0; i < n; i++) 
-        memcpy_test(rbuf, sbuf, size);
+    size_t segs = size_alloc / size;
+    for(size_t i = 0; i < n; i++) {
+        size_t seg = i % segs;
+        memcpy_test((char*)rbuf + size * seg, (char*)sbuf + size * seg, size);
+    }
 }
 vector<int> get_socket_list_with_cpu_index()
 {
@@ -42,12 +45,13 @@ struct memcpy_info{
 int main(int argc, char **argv)
 {
     size_t size = std::stoll(argv[1]);
-    int nthread = std::stoi(argv[2]);
-    int niter = std::stoi(argv[3]);
+    size_t size_alloc = std::stoll(argv[2]);
+    int nthread = std::stoi(argv[3]);
+    size_t niter = std::stoll(argv[4]);
     // numa_alloc_onnode
     // numa_alloc_interleaved
     // numa_alloc_local
-    if(size < 1000000000) {
+    if(size_alloc < 1000000000) {
         printf("If you want to test DRAM speed, use GB level memory.\n");
     }
     int nnode = numa_num_configured_nodes();
@@ -63,12 +67,12 @@ int main(int argc, char **argv)
             exit(1);
         }
         socket_of_cpu[cpuid] = -1;
-        mem_pool.push_back((memcpy_info){malloc_touched(size, node), malloc_touched(size, node), cpuid, node});
+        mem_pool.push_back((memcpy_info){malloc_touched(size_alloc, node), malloc_touched(size_alloc, node), cpuid, node});
     }
     uint64_t start = gettime_ns();
     std::vector<std::thread> thread_pool;
     for(int i = 0; i < nthread; i++) {
-        thread t = std::thread(repeate_memcpy_test, niter, mem_pool[i].rbuf, mem_pool[i].sbuf, size);
+        thread t = std::thread(repeate_memcpy_test, niter, mem_pool[i].rbuf, mem_pool[i].sbuf, size, size_alloc);
         
         printf("thread %d on cpu %d\n", i, mem_pool[i].cpuid);
 
@@ -83,13 +87,11 @@ int main(int argc, char **argv)
     for(int i = 0; i < nthread; i++) {
 	    thread_pool[i].join();
     }
-    //volatile_memcpy(rbuf, sbuf, size);
-    // std::copy(sbuf, sbuf+size, rbuf);
     uint64_t nbyte = size * nthread * niter;
     uint64_t end = gettime_ns();
     uint64_t dt_ns = end - start;
     double tpt_MBps = 1.0*nbyte/dt_ns*1e3;
     double tpt_Gbps = 1.0*nbyte*8/dt_ns;
-    printf("%llu: %.2lf s, %.2lf Gbps, %.2lf MBps\n", nbyte, dt_ns*1e-9, tpt_Gbps, tpt_MBps);
+    printf("%llu bytes, %.2lf s, %.2lf Gbps, %.2lf MBps\n", nbyte, dt_ns*1e-9, tpt_Gbps, tpt_MBps);
     return 0;
 }
