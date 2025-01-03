@@ -62,7 +62,9 @@ int main(int argc, char **argv)
         ret = cudaSetDevice(gpuid);
         assert(ret == cudaSuccess);
     
-        int node = i % nnode;
+        cudaDeviceProp prop;
+        cudaGetDeviceProperties(&prop, gpuid);
+        int node = prop.pciDomainID;
         void *gpu_buf;
         cudaMalloc(&gpu_buf, size_alloc);
         mem_pool.push_back(std::make_pair(malloc_touched(size_alloc, node), (char*)gpu_buf));
