@@ -2,8 +2,22 @@
 #include <numa.h>
 #include <cuda.h>
 #include <cuda_runtime.h>
+#include <nvml.h>
+
 using std::vector, std::thread;
 //using namespace std;
+
+#define CHECK_NVML(call)                                                   \
+    do {                                                                    \
+        nvmlReturn_t _res = call;                                          \
+        if (_res != NVML_SUCCESS) {                                        \
+            std::cerr << "NVML error " << _res                               \
+                      << " at " << __FILE__ << ":" << __LINE__             \
+                      << " -> " << nvmlErrorString(_res) << "\n";          \
+            std::exit(1);                                                  \
+        }                                                                   \
+    } while (0)
+
 char *malloc_touched(size_t size, int node)
 {
     // void *buf;
@@ -39,6 +53,19 @@ void repeat_memcpy_test(size_t n, void *rbuf, void *sbuf, size_t size, size_t si
     cudaStreamSynchronize(s);
 }
 
+int readNumaNode(const std::string &pciBusId)
+{
+    std::string path = "/sys/bus/pci/devices/" + pciBusId + "/numa_node";
+    std::ifstream ifs(path);
+    if (!ifs.is_open()) {
+        // -1 表示读取失败或该设备不属于任何 node
+        return -1;
+    }
+    int node = -1;
+    ifs >> node;
+    return node;
+}
+
 int main(int argc, char **argv)
 {
     size_t size = std::stoll(argv[1]);
@@ -48,6 +75,10 @@ int main(int argc, char **argv)
     // numa_alloc_onnode
     // numa_alloc_interleaved
     // numa_alloc_local
+
+    CHECK_NVML( nvmlInit() );
+
+
     int nnode = numa_num_configured_nodes();
     int ngpu;
     auto ret = cudaGetDeviceCount(&ngpu);
@@ -62,9 +93,15 @@ int main(int argc, char **argv)
         ret = cudaSetDevice(gpuid);
         assert(ret == cudaSuccess);
     
-        cudaDeviceProp prop;
-        cudaGetDeviceProperties(&prop, gpuid);
-        int node = prop.pciDomainID;
+        nvmlDevice_t dev;
+        CHECK_NVML( nvmlDeviceGetHandleByIndex(i, &dev) );
+        nvmlPciInfo_t pci;
+        CHECK_NVML( nvmlDeviceGetPciInfo(dev, &pci) );
+        std::string busId = pci.busId;
+        busId = busId.substr(4, 12);
+        for (auto &c : busId) c = std::tolower(c);
+        std::cout << "busId: " << busId << std::endl;
+        int node = readNumaNode(busId);
         void *gpu_buf;
         cudaMalloc(&gpu_buf, size_alloc);
         mem_pool.push_back(std::make_pair(malloc_touched(size_alloc, node), (char*)gpu_buf));
@@ -97,5 +134,7 @@ int main(int argc, char **argv)
     double tpt_MBps = 1.0*nbyte/dt_ns*1e3;
     double tpt_Gbps = 1.0*nbyte*8/dt_ns;
     printf("%llu bytes, %.2lf s, %.2lf Gbps, %.2lf MBps\n", nbyte, dt_ns*1e-9, tpt_Gbps, tpt_MBps);
+
+    CHECK_NVML( nvmlShutdown() );
     return 0;
 }

@@ -1,8 +1,8 @@
 CXX = g++
 CXX_flags = -O3 # this does not affect performance
 GCC_flags = -march=native -mavx512f -mavx512bw # this does not affect the performance, since we use memcpy which is in a precompiled library
-link_flags = -lpthread -lnuma
-cuda_link_flags = -lcudart
+link_flags = -lpthread -lnuma 
+cuda_link_flags = -lcudart -lnvidia-ml
 exe_list = memcpy_test cuda_memcpy_test
 all: $(exe_list)
 

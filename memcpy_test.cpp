@@ -62,6 +62,7 @@ int main(int argc, char **argv)
     for(int i = 0; i < nthread; i++) {
         int node = i % nnode;
         int cpuid = std::find(socket_of_cpu.begin(), socket_of_cpu.end(), node) - socket_of_cpu.begin();
+        printf("thread %d on cpu %d of numa node %d\n", i, cpuid, node);
         if(cpuid == socket_of_cpu.size()) {
             perror("No enough cores\n");
             exit(1);
@@ -73,8 +74,6 @@ int main(int argc, char **argv)
     std::vector<std::thread> thread_pool;
     for(int i = 0; i < nthread; i++) {
         thread t = std::thread(repeate_memcpy_test, niter, mem_pool[i].rbuf, mem_pool[i].sbuf, size, size_alloc);
-        
-        printf("thread %d on cpu %d\n", i, mem_pool[i].cpuid);
 
         pthread_t thread_native_handle = t.native_handle();
         cpu_set_t cpuset;
