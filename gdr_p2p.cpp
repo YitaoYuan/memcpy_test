@@ -50,6 +50,7 @@ struct exch {
     uint32_t rkey;
     uint32_t qp_num;
     uint16_t lid;
+    ibv_gid  gid;
     uint16_t pad;
 };
 
@@ -182,13 +183,22 @@ static void modify_qp_init(struct ibv_qp *qp, int port)
 static void modify_qp_rtr(struct ibv_qp *qp,
                           uint32_t remote_qpn,
                           uint16_t dlid,
-                          int port)
+                          ibv_gid dgid,
+                          int port,
+                          int local_gid_index)
 {
     struct ibv_qp_attr attr;
     struct ibv_ah_attr ah;
     memset(&attr,0,sizeof attr);
     memset(&ah,0,sizeof ah);
-    ah.is_global     = 0;
+    ah.is_global     = 1; 
+    
+    ah.grh.dgid = dgid;
+    ah.grh.flow_label = 0;
+    ah.grh.sgid_index = local_gid_index; // 本地 GID index，需与 query_gid 一致
+    ah.grh.hop_limit  = 1;
+    ah.grh.traffic_class = 0;
+
     ah.dlid          = dlid;
     ah.sl            = 0;
     ah.src_path_bits = 0;
@@ -223,6 +233,46 @@ static void modify_qp_rts(struct ibv_qp *qp)
         IBV_QP_RETRY_CNT| IBV_QP_RNR_RETRY  |
         IBV_QP_SQ_PSN   | IBV_QP_MAX_QP_RD_ATOMIC);
     ASSERT(ret == 0);
+}
+
+bool find_gid_index(struct ibv_context *ctx, int port, int *out_gid_index, ibv_gid *out_gid, int gid_type=IBV_GID_TYPE_ROCE_V2)
+{
+    struct ibv_port_attr pattr;
+    if (ibv_query_port(ctx, port, &pattr)) {
+        perror("ibv_query_port");
+        return false;
+    }
+
+    // 遍历 GID 表
+    for (int i = 0; i < pattr.gid_tbl_len; i++) {
+        struct ibv_gid_entry entry;
+        
+        // 使用 ibv_query_gid_ex 获取详细信息 (flags 传 0 即可)
+        // 注意：这是 verbs.h 中的扩展 API
+        if (ibv_query_gid_ex(ctx, port, i, &entry, 0) == 0) {
+            
+            // 检查类型是否为 RoCE v2
+            if (entry.gid_type == gid_type) {
+                // 再次检查 GID 是否非零 (通常 query_gid_ex 成功的条目都是有效的，但为了保险)
+                uint64_t *raw = (uint64_t *)entry.gid.raw;
+                if (raw[0] == 0 && raw[1] == 0) continue;
+
+                if (raw[0] != 0 || (raw[1] & 0xffffffff) != 0xffff0000) continue; // not a IP mapped GID
+
+                if (out_gid) {
+                    *out_gid = entry.gid;
+                }
+                // printf("Found RoCE v2 via API at index %d\n", i);
+                if (out_gid_index) {
+                    *out_gid_index = i;
+                }
+                return true;
+            }
+        }
+    }
+
+    fprintf(stderr, "Warning: No RoCE v2 GID found on port %d\n", port);
+    return false;
 }
 
 int main(int argc, char **argv)
@@ -260,7 +310,7 @@ int main(int argc, char **argv)
             for(int p=1;p<=dattr.phys_port_cnt;p++){
                 // printf("2\n");
                 struct ibv_port_attr pattr;
-                if (ibv_query_port(ctx,p,&pattr)) continue;
+                if (ibv_query_port(ctx, p, &pattr)) continue;
                 // printf("3\n");
                 // printf("%d %d\n", pattr.phys_state, IBV_PORT_PHY_LINK_UP);
                 if (pattr.state!=IBV_PORT_ACTIVE) continue;
@@ -295,6 +345,14 @@ int main(int argc, char **argv)
     int my_gpu = is_client?0:1;
     struct ibv_context *ctx = best_ctx[my_gpu];
     int my_port = best_port[my_gpu];
+
+    int my_gid_index;
+    ibv_gid my_gid;
+    if(find_gid_index(ctx, my_port, &my_gid_index, &my_gid) == false) {
+        fprintf(stderr, "ibv_query_gid failed\n");
+        exit(1);
+    }
+    printf("gid_index: %d\n", my_gid_index);
 
     /* 2) CUDA malloc + GDR pin/map */
     cudaSetDevice(my_gpu);
@@ -352,6 +410,7 @@ int main(int argc, char **argv)
     local.rkey   = mr->rkey;
     local.qp_num = qp->qp_num;
     local.lid    = my_lid;
+    memcpy(&local.gid, &my_gid, sizeof(ibv_gid));
     local.pad    = 0;
 
     if (is_client) {
@@ -362,7 +421,7 @@ int main(int argc, char **argv)
         write(peer_fd,&local,sizeof local);
     }
 
-    modify_qp_rtr(qp,remote.qp_num,remote.lid,my_port);
+    modify_qp_rtr(qp, remote.qp_num, remote.lid, remote.gid, my_port, my_gid_index);
     modify_qp_rts(qp);
 
     struct ibv_sge sg = {};
