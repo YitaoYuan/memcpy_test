@@ -149,6 +149,7 @@ int main(int argc, char* argv[]) {
     std::cout<<"[Client] send done\n";
   } else {
     // 服务端接收到 buf 中，然后拷贝回 host 验证
+    std::cout<<"[Server] receiving "<<count<<" floats\n";
     CHECK_NCCL( ncclRecv(d_buf, count, ncclFloat, 1, comm, stream) );
     CHECK_CUDA( cudaStreamSynchronize(stream) );
     std::vector<float> h_recv(count);

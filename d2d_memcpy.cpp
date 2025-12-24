@@ -7,6 +7,7 @@
 #include <algorithm>
 #include <random>
 #include <vector>
+#include <chrono>
 
 #define CUDA_CALL(call)                                                      \
   do {                                                                       \
@@ -76,14 +77,13 @@ int main(int argc, char **argv)
     }
  
     // Init Timing Data
-    cudaEvent_t start;
-    cudaEvent_t stop;
-    cudaEventCreate(&start);
-    cudaEventCreate(&stop);
  
     // Init Stream
-    cudaStream_t stream;
-    cudaStreamCreateWithFlags(&stream, cudaStreamNonBlocking);
+    const int stream_count = 1;
+    cudaStream_t streams[stream_count];
+    for(int i = 0; i < stream_count; i++) {
+        cudaStreamCreateWithFlags(&streams[i], cudaStreamNonBlocking);
+    }
  
     // std::vector<cudaMemcpyAttributes> attrs(1);
     // // attrs[0].kind            = cudaMemcpyHostToDevice;
@@ -93,24 +93,27 @@ int main(int argc, char **argv)
     // attrs[0].flags           = cudaMemcpyFlagPreferOverlapWithCompute;  
 
     // ~~ Start Test ~~
-    cudaEventRecord(start, stream);
+    for(int i = 0; i < stream_count; i++) {
+        cudaStreamSynchronize(streams[i]);
+    }
+    
+    auto start = std::chrono::high_resolution_clock::now();
  
     //Do a P2P memcpy
     size_t failIdx;
     // cudaMemcpyBatchAsync (recv_addr.data(), send_addr.data(), sizes.data(), recv_addr.size(), attrs.data, &(size_t)0, 1, &failIdx, stream);
     for (int i = 0; i < repeat; ++i) {
-        cudaMemcpyAsync((char*)recv_addr[i] - dev_0 + dev_1, send_addr[i], size, cudaMemcpyDeviceToDevice, stream);
+        cudaMemcpyAsync((char*)recv_addr[i] - dev_0 + dev_1, send_addr[i], size, cudaMemcpyDeviceToDevice, streams[i%stream_count]);
         // cudaMemcpyPeerAsync(recv_addr[i], gpuid_0, send_addr[i], gpuid_1, size, stream);
     }
  
-    cudaEventRecord(stop, stream);
-    cudaStreamSynchronize(stream);
-    // ~~ End of Test ~~
- 
-    // Check Timing & Performance
-    float time_ms;
-    cudaEventElapsedTime(&time_ms, start, stop);
-    double time_s = time_ms / 1e3;
+    for(int i = 0; i < stream_count; i++) {
+        cudaStreamSynchronize(streams[i]);
+    }
+    auto end = std::chrono::high_resolution_clock::now();
+    std::chrono::duration<double> duration = end - start;
+    double time_s = duration.count();
+    printf("Time: %.3f s\n", time_s);
  
     double gb = size * repeat / (double)1e9;
     double bandwidth = gb / time_s;
@@ -130,7 +133,7 @@ int main(int argc, char **argv)
     cudaFree(dev_0);
     cudaFree(dev_1);
  
-    cudaEventDestroy(start);
-    cudaEventDestroy(stop);
-    cudaStreamDestroy(stream);
+    for(int i = 0; i < stream_count; i++) {
+        cudaStreamDestroy(streams[i]);
+    }
 }
