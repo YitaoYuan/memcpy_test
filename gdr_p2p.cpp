@@ -1,4 +1,4 @@
-// nvcc ./gdr_p2p.cpp -o gdr_p2p -O2 -lnccl -lgdrapi -lnvidia-ml $(pkg-config --cflags --libs libibverbs)
+// nvcc ./gdr_p2p.cpp -o gdr_p2p -O2 -lnccl -lnvidia-ml $(pkg-config --cflags --libs libibverbs)
 /*
  * gdr_rc_pingpong_fixed2.c
  *
@@ -188,29 +188,28 @@ static void modify_qp_rtr(struct ibv_qp *qp,
                           int local_gid_index)
 {
     struct ibv_qp_attr attr;
-    struct ibv_ah_attr ah;
-    memset(&attr,0,sizeof attr);
-    memset(&ah,0,sizeof ah);
-    ah.is_global     = 1; 
-    
-    ah.grh.dgid = dgid;
-    ah.grh.flow_label = 0;
-    ah.grh.sgid_index = local_gid_index; // 本地 GID index，需与 query_gid 一致
-    ah.grh.hop_limit  = 1;
-    ah.grh.traffic_class = 0;
+    memset(&attr, 0, sizeof attr);
 
-    ah.dlid          = dlid;
-    ah.sl            = 0;
-    ah.src_path_bits = 0;
-    ah.port_num      = port;
-    attr.ah_attr            = ah;
+    attr.ah_attr.dlid          = dlid;
+    attr.ah_attr.sl            = 0;
+    attr.ah_attr.src_path_bits = 0;
+    attr.ah_attr.port_num      = port;
     attr.qp_state           = IBV_QPS_RTR;
     attr.path_mtu           = IBV_MTU_1024;
     attr.dest_qp_num        = remote_qpn;
     attr.rq_psn             = 0;
     attr.max_dest_rd_atomic = 1;
     attr.min_rnr_timer      = 12;
+
+    if(dgid.global.interface_id) {
+        attr.ah_attr.is_global     = 1; 
+        attr.ah_attr.grh.dgid = dgid;
+        attr.ah_attr.grh.sgid_index = local_gid_index; // 本地 GID index，需与 query_gid 一致
+        attr.ah_attr.grh.hop_limit  = 1;
+    }
+
     int ret = ibv_modify_qp(qp,&attr,
+
         IBV_QP_STATE   | IBV_QP_AV       |
         IBV_QP_PATH_MTU| IBV_QP_DEST_QPN |
         IBV_QP_RQ_PSN  | IBV_QP_MAX_DEST_RD_ATOMIC|
@@ -389,7 +388,7 @@ int main(int argc, char **argv)
     qpia.cap.max_send_sge = 8;
     qpia.cap.max_recv_sge = 8;
     qpia.qp_type        = IBV_QPT_RC;
-    struct ibv_qp *qp = ibv_create_qp(pd,&qpia);
+    struct ibv_qp *qp = ibv_create_qp(pd, &qpia);
     ASSERT(qp != NULL);
 
     struct ibv_mr *mr = ibv_reg_mr(pd,d_buf /*bar_ptr*/,SIZE,
